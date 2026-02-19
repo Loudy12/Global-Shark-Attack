@@ -1,0 +1,618 @@
+---
+title: "Shark Incidents Stats Final Project"
+author: "Connor Loudermilk"
+date: "2025-05-02"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    number_sections: true
+---
+## Executive Summary
+
+- Shark incidents show a steady long-term increase, with a notable rise after ~1988, likely reflecting improved reporting and increased coastal recreation.
+- The most commonly injured body parts are the **leg (1128)**, **foot (880)**, and **arm (663)**, accounting for a substantial share of reported injuries.
+- Afternoon incidents represent **44.6%** of cases compared to **5.4%** at night, yielding a relative risk of **8.3** (p < 2.2e-16).
+- Males experience the majority of incidents and are **7.06 times more likely** to be attacked than females (p < 2.2e-16).
+- Time of day and fatality outcome are significantly associated (χ² = 11.88, p = 0.0078), suggesting fatality risk varies by time period.
+- Fatal attacks occur disproportionately at night, with a fatality rate of **70%** compared to **22%** at other times (relative risk = **3.16**).
+- Surfing, swimming, and fishing account for approximately **56.9%** of incidents (p < 2.2e-16), indicating these activities dominate exposure risk.
+- Victim age shows a slight but significant upward trend over time (linear regression p < 2.2e-16), with a mean age of **28.1 years** (95% CI: 27.65–28.57).
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE) #libraries
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(tibble)
+
+
+# Clean the data into content 
+clean_mixed_dates <- function(date_vec) {
+  sapply(date_vec, function(x) {
+    x <- trimws(as.character(x))
+    #handle raw data from excel
+    if (grepl("^\\d{4,5}$", x)) {
+      num <- as.numeric(x)
+      if (!is.na(num)) return(as.character(as.Date(num, origin = "1899-12-30")))
+    }
+
+    #try all date formats
+    try_formats <- c("%m-%d-%Y", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y", 
+                     "%Y", "%b-%Y", "%B %d, %Y", "%m-%Y")
+
+    for (fmt in try_formats) {
+      parsed <- suppressWarnings(as.Date(x, format = fmt))
+      if (!is.na(parsed)) return(as.character(parsed))
+    }
+
+    return(NA)
+  })
+}
+
+df <- readxl::read_excel(here::here("data", "clean", "GSAF5.xlsx"))
+```
+
+```{r}
+# clean and parse data so that it doesn't automatically assign values
+df <- df %>%
+  mutate(date_raw = as.character(Date),
+         date_clean = str_remove_all(date_raw, regex("(?i)reported\\s*")))
+
+#cleaned data frame
+df_clean <- df %>%
+  mutate(
+    date_raw = as.character(Date),
+    date_clean = str_remove_all(date_raw, regex("(?i)reported\\s*")),
+    cleaned_date = as.Date(clean_mixed_dates(date_clean)),
+
+    year = as.integer(Year),
+    fatal = as.integer(`Fatal 1/0`),
+    sex = ifelse(Sex %in% c("M", "F"), Sex, NA),
+    age = as.numeric(Age),
+    
+    time = suppressWarnings(hm(ifelse(str_detect(Time, "^[0-9]{1,2}[:h][0-9]{2}$"), 
+                                      str_replace(Time, "h", ":"), 
+                                      NA_character_))),
+    
+    species = tolower(Species)
+  )
+
+#get correct date data
+df_clean <- df_clean %>%
+  mutate(
+    day = if_else(!is.na(cleaned_date), day(cleaned_date), NA_integer_),
+    month = if_else(!is.na(cleaned_date), month(cleaned_date, label = TRUE, abbr = TRUE), NA)
+  )
+
+
+```
+
+```{r}
+# shark attack data for years
+df_clean %>%
+  filter(!is.na(year), year >= 1600) %>%
+  count(year) %>%
+  ggplot(aes(x = year, y = n)) +
+  geom_line() +
+  geom_vline(xintercept = 1988, color = "yellow", linetype = "dashed", size = 0.8) + #phone 
+  geom_vline(xintercept = 1940, color = "green", linetype = "dashed", size = 0.8) + #wwII
+  geom_vline(xintercept = 1946, color = "green", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = 1955, color = "purple", linetype = "dashed", size = 0.8) +#vietnam war
+  geom_vline(xintercept = 1975, color = "purple", linetype = "dashed", size = 0.8) +
+  labs(title = "Shark Attacks Over Time (From 1600)", y = "Number of Attacks", x = "Year") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+```
+
+
+```{r}
+#get count of injuries to certain body types 
+#then form chart for ranking the amounts of scale for injuries
+body_parts <- c("leg", "arm", "head", "foot", "hand", "back", "shoulder", "face", "knee", "ankle", "abdomen", "calf", "toe", "thigh", "torso")
+
+counts <- sapply(body_parts, function(part) {
+  sum(str_detect(tolower(df_clean$Injury), part), na.rm = TRUE)
+})
+
+injury_counts <- data.frame(
+  BodyPart = names(counts),
+  Count = as.integer(counts)
+) %>%
+  arrange(desc(Count))
+
+print(injury_counts)
+
+
+ggplot(injury_counts, aes(x = reorder(BodyPart, Count), y = Count)) +
+  geom_col(fill = "darkblue") +
+  coord_flip() +
+  labs(
+    title = "Shark Injuries by Body Part",
+    x = "Body Part",
+    y = "Number of Injuries"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))  
+```
+
+```{r}
+# most common types of activies in data and search through coloumn for instances
+#get the count for each
+#plot based off of how many in count 
+activity_keywords <- c("surf", "swim", "diving", "fish", "wading", "snorkel", "scuba",
+                       "kayak", "sail", "standing", "spearfishing", "board", "boat", "bathing", "bath", "feed", "net", "plane")
+
+activity_counts <- sapply(activity_keywords, function(keyword) {
+  sum(str_detect(tolower(df_clean$Activity), keyword), na.rm = TRUE)
+})
+
+activity_summary <- data.frame(Activity = names(activity_counts), Count = as.integer(activity_counts))
+
+ggplot(activity_summary, aes(x = reorder(Activity, Count), y = Count)) +
+  geom_col(fill = "darkblue") +
+  coord_flip() +
+  labs(
+    title = "Shark Incidents by Activity Type",
+    x = "Activity",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# parse through data set finding sharks while ignoring unidentified 
+#it then plots the top 10 sharks it found
+df_clean <- df_clean %>% mutate(species = tolower(str_trim(species)))
+shark_counts <- df_clean %>%
+  filter(!is.na(species), species != "", !str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement")) %>%
+  count(species, sort = TRUE)
+
+shark_counts %>%
+  slice_max(n, n = 10) %>%
+  ggplot(aes(x = reorder(species, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Shark Species Involved in Incidents", x = "Shark Species", y = "Number of Incidents") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# produce a heat map for instance where top 10 sharks and where the majority of their given injuries occur on body
+
+df_clean <- df_clean %>% mutate(injury = tolower(Injury))
+body_parts <- c("leg", "arm", "head", "foot", "hand", "back", "shoulder", "face", "knee", "ankle", "abdomen", "calf", "thigh", "torso")
+injury_long <- df_clean %>%
+  filter(
+    !is.na(species), 
+    !is.na(injury),
+    !str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement")
+  ) %>%
+  select(species, injury) %>%
+  rowwise() %>%
+  mutate(matches = list(body_parts[str_detect(injury, body_parts)])) %>%
+  unnest(matches) %>%
+  group_by(species, matches) %>%
+  summarise(count = n(), .groups = "drop")
+
+colnames(injury_long) <- c("SharkSpecies", "BodyPart", "Count")
+top_species <- injury_long %>% count(SharkSpecies, wt = Count, sort = TRUE) %>% slice_head(n = 10) %>% pull(SharkSpecies)
+injury_long %>%
+  filter(SharkSpecies %in% top_species) %>%
+  ggplot(aes(x = BodyPart, y = SharkSpecies, fill = Count)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "firebrick") +
+  labs(title = "Body Parts Injured by Shark Species", x = "Body Part", y = "Shark Species") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Countries 
+```{r}
+# parse through countries and count attacks/incidents
+#Plot top 15 countries w the most 
+country_counts <- df_clean %>%
+  filter(!is.na(Country), Country != "") %>%
+  count(Country, sort = TRUE)
+country_counts %>%
+  slice_max(n, n = 15) %>%
+  ggplot(aes(x = reorder(Country, n), y = n)) +
+  geom_col(fill = "darkblue") +
+  coord_flip() +
+  labs(
+    title = "Top 15 Countries with Shark Incidents",
+    x = "Country",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# get the possible times in data and put them into sets so that they can be specified by time of the day
+df_clean <- df_clean %>%
+  mutate(time_hour = hour(time),
+         time_of_day = case_when(
+           time_hour >= 5 & time_hour < 12 ~ "Morning",
+           time_hour >= 12 & time_hour < 17 ~ "Afternoon",
+           time_hour >= 17 & time_hour < 21 ~ "Evening",
+           time_hour >= 21 | time_hour < 5 ~ "Night",
+           TRUE ~ NA_character_))  # Exclude unknowns
+
+time_counts <- df_clean %>%
+  filter(!is.na(time_of_day)) %>%
+  count(time_of_day, sort = TRUE)
+
+ggplot(time_counts, aes(x = reorder(time_of_day, -n), y = n)) +
+  geom_col(fill = "orange") +
+  labs(title = "Shark Incidents by Time of Day (Excluding Unknown)", x = "Time of Day", y = "Number of Incidents") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+
+```{r}
+
+#############################################RELATIVE RISK
+#get the counts for time of day, calcualte proportions, then calculate the more likely
+time_counts <- df_clean %>%
+  filter(!is.na(time_of_day)) %>%
+  count(time_of_day)
+
+afternoon_count <- time_counts$n[time_counts$time_of_day == "Afternoon"]
+night_count <- time_counts$n[time_counts$time_of_day == "Night"]
+total <- sum(time_counts$n)
+
+afternoon_prop <- afternoon_count / total
+night_prop <- night_count / total
+
+relative_risk <- afternoon_prop / night_prop
+
+cat("Afternoon proportion:", round(afternoon_prop, 4), "\n")
+cat("Night proportion:", round(night_prop, 4), "\n")
+cat("Relative risk (Afternoon vs Night):", round(relative_risk, 2), "\n")
+
+
+```
+
+
+
+```{r}
+################Z Test
+# Counts for afternoon and night
+afternoon_count <- time_counts$n[time_counts$time_of_day == "Afternoon"]
+night_count <- time_counts$n[time_counts$time_of_day == "Night"]
+
+# Total non-missing entries for afternoon and night
+afternoon_total <- sum(time_counts$n)  # total for all times
+night_total <- afternoon_total         # same total since it's all from same dataset
+
+# Run 2-sample proportion test
+prop.test(c(afternoon_count, night_count), c(afternoon_total, night_total))
+
+
+```
+
+
+Gender Comparison
+```{r}
+# get the cleaned data then ncreate graph to show the distribution between genders and attacks
+df_clean <- df_clean %>%
+  mutate(sex = toupper(trimws(Sex)),
+         sex = case_when(sex %in% c("M", "F") ~ sex, TRUE ~ "U"))
+sex_counts <- df_clean %>%
+  count(sex) %>%
+  mutate(sex = recode(sex, "M" = "Male", "F" = "Female", "U" = "Groups"))
+
+ggplot(sex_counts, aes(x = sex, y = n, fill = sex)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Shark Incidents by Sex", x = "Sex", y = "Number of Incidents") +
+  scale_fill_manual(values = c("Male" = "dodgerblue", "Female" = "deeppink", "Groups" = "gray")) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+######get the likelyhood of incident happening more 
+# filter to only know sexes
+sex_data <- df_clean %>%
+  filter(sex %in% c("M", "F"))
+
+male_count <- sum(sex_data$sex == "M")
+female_count <- sum(sex_data$sex == "F")
+total <- male_count + female_count
+# get proportions
+male_prop <- male_count / total
+female_prop <- female_count / total
+# risk ratio
+relative_risk <- male_prop / female_prop
+prop_test <- prop.test(c(male_count, female_count), c(total, total))
+cat("Males are", round(relative_risk, 2), "times more likely to be attacked than females.\n")
+cat("p-value:", prop_test$p.value, "\n")
+```
+
+
+Linear Regression for ages over time 
+```{r}
+#get clean data and plot the regression model
+df_reg <- df_clean %>% filter(!is.na(age), !is.na(year), age > 0, year >= 1800)
+model <- lm(age ~ year, data = df_reg)
+summary(model)
+
+ggplot(df_reg, aes(x = year, y = age)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Age of Shark Attack Victims Over Time", x = "Year", y = "Age") +
+  theme(plot.title = element_text(hjust = 0.5))
+#confidence test
+ages <- df_clean$age[!is.na(df_clean$age)]
+t.test(ages, conf.level = 0.95)
+```
+
+Chi-squared Test: Country vs. Shark Species
+```{r}
+#for the purpose that other methods are possible
+tbl_country_species <- df_clean %>%
+  filter(!is.na(Country), Country != "", !is.na(species), species != "",
+         !str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement")) %>%
+  count(Country, species) %>%
+  pivot_wider(names_from = species, values_from = n, values_fill = 0)
+
+chisq.test(as.matrix(tbl_country_species[,-1]))
+
+
+```
+
+
+
+Chi-squared Test: Time of Day vs. Fatality produces the p value 
+```{r}
+tbl_time_fatal <- df_clean %>%
+  filter(!is.na(time_of_day), !is.na(fatal)) %>%
+  count(time_of_day, fatal) %>%
+  pivot_wider(names_from = fatal, values_from = n, values_fill = 0)
+
+chisq.test(as.matrix(tbl_time_fatal[,-1]))
+
+
+```
+
+
+Time of Day vs Fatality
+```{r}
+#get cleaned data for fatality or survial for certain times of the day as we made earlier
+#then plot 
+fatality_time <- df_clean %>%
+  filter(!is.na(time_of_day), !is.na(fatal)) %>%
+  mutate(fatal = ifelse(fatal == 1, "Fatal", "Non-Fatal")) %>%
+  count(time_of_day, fatal)
+ggplot(fatality_time, aes(x = time_of_day, y = n, fill = fatal)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Shark Attack Fatalities by Time of Day",
+    x = "Time of Day",
+    y = "Number of Incidents",
+    fill = "Outcome"
+  ) +
+  scale_fill_manual(values = c("Fatal" = "firebrick", "Non-Fatal" = "forestgreen")) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+
+Month Graph
+```{r}
+# get month data to produce chart for instances all time for attacks in months
+# if data value doesn't have a month it ignores
+df_clean <- df_clean %>%
+  mutate(
+    month = month(cleaned_date, label = TRUE, abbr = TRUE),
+    day = day(cleaned_date)
+  )
+
+df_clean %>%
+  filter(!is.na(month)) %>%
+  count(month) %>%
+  ggplot(aes(x = month, y = n)) +
+  geom_col(fill = "turquoise4") +
+  labs(
+    title = "Shark Incidents by Month",
+    x = "Month",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
+
+
+
+
+Each month individually showing regression model all time for each
+```{r}
+# clean and get rid of incomplete dates
+# handles numeric forms
+#fits a linear regression for each month 
+# applies same axis lines as the all time list
+df_monthly <- df_clean %>%
+  filter(!is.na(cleaned_date), !is.na(year), !is.na(month)) %>%
+  group_by(year, month) %>%
+  summarise(count = n(), .groups = "drop")
+df_monthly <- df_monthly %>%
+  mutate(month_num = as.numeric(month))
+model <- lm(count ~ year * month_num, data = df_monthly)
+summary(model)
+df_monthly_filtered <- df_monthly %>% filter(year >= 1700)
+#tried possible predictions
+df_monthly_filtered$predicted <- predict(model, newdata = df_monthly_filtered)
+ggplot(df_monthly_filtered, aes(x = year)) +
+  geom_point(aes(y = count), color = "darkblue", alpha = 0.6) +
+  geom_line(aes(y = predicted), color = "red", size = 1) +
+  geom_vline(xintercept = 1940, color = "yellow", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = 1940, color = "green", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = 1946, color = "green", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = 1955, color = "purple", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = 1975, color = "purple", linetype = "dashed", size = 0.8) +
+  facet_wrap(~ month_num, scales = "free_y") +
+  labs(
+    title = "Shark Incidents by Year and Month (1700+)",
+    x = "Year",
+    y = "Incident Count"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+basic fatal vs not fatal for attacks
+```{r}
+#get clean data and plot for fatal and not fatal
+#plot the data
+fatality_summary <- df_clean %>%
+  filter(!is.na(fatal)) %>%
+  mutate(fatal = ifelse(fatal == 1, "Fatal", "Non-Fatal")) %>%
+  count(fatal)
+ggplot(fatality_summary, aes(x = fatal, y = n, fill = fatal)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    title = "Shark Attack Outcomes: Fatal vs Non-Fatal",
+    x = "Outcome",
+    y = "Number of Incidents"
+  ) +
+  scale_fill_manual(values = c("Fatal" = "firebrick", "Non-Fatal" = "forestgreen")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+fatality_test <- prop.test(
+  x = sum(df_clean$fatal == 0, na.rm = TRUE),
+  n = sum(df_clean$fatal %in% c(0, 1), na.rm = TRUE)
+)
+fatality_test
+
+################RELATIVE RISK
+#get the relative rates for comparitive ananlyis 
+#in specific nighht and other times
+night_data <- fatality_time %>% filter(time_of_day == "Night")
+night_fatal <- night_data %>% filter(fatal == "Fatal") %>% pull(n)
+night_total <- sum(night_data$n)
+other_data <- fatality_time %>% filter(time_of_day != "Night")
+other_fatal <- other_data %>% filter(fatal == "Fatal") %>% pull(n) %>% sum()
+other_total <- sum(other_data$n)
+#get rates
+night_rate <- night_fatal / night_total
+other_rate <- other_fatal / other_total
+relative_risk <- night_rate / other_rate
+cat("Fatality Rate at Night:", round(night_rate, 4), "\n")
+cat("Fatality Rate at Other Times:", round(other_rate, 4), "\n")
+cat("Relative Risk (Night vs Other):", round(relative_risk, 2), "\n")
+```
+
+Attempted calculating shark fatality rates
+```{r}
+#get clean data then get p for fatal
+species_fatality_tbl <- df_clean %>%
+  filter(!is.na(species), species != "",
+         !str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement"),
+         !is.na(fatal)) %>%
+  count(species, fatal) %>%
+  pivot_wider(names_from = fatal, values_from = n, values_fill = 0)
+
+top_species <- df_clean %>%
+  count(species, sort = TRUE) %>%
+  filter(!str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement")) %>%
+  slice_head(n = 10) %>%
+  pull(species)
+
+species_fatality_tbl <- species_fatality_tbl %>% filter(species %in% top_species)
+
+fatal_matrix <- species_fatality_tbl %>%
+  column_to_rownames("species") %>%
+  as.matrix()
+chisq.test(fatal_matrix)
+```
+
+Get values for top three acivities to see how much they makeup activties where it happens
+```{r}
+# get clean data then group the big 3. count total and test against hypotheis 
+df_clean <- df_clean %>%
+  mutate(activity_clean = tolower(Activity))
+
+group_total <- sum(str_detect(df_clean$activity_clean, "fish|swim|surf"), na.rm = TRUE)
+
+total_non_na <- sum(!is.na(df_clean$activity_clean))
+
+prop.test(group_total, total_non_na)
+
+```
+
+
+
+Get estimates and important values for 3 most targeted body parts
+```{r}
+#get clean words for top three body parts
+#then count injuries as a total
+#ignore the N/A values
+#run sample test
+target_parts <- c("leg", "foot", "arm")
+df_clean <- df_clean %>%
+  mutate(injury_clean = tolower(Injury))
+target_total <- sum(str_detect(df_clean$injury_clean, str_c(target_parts, collapse = "|")), na.rm = TRUE)
+injury_total <- sum(!is.na(df_clean$injury_clean))
+prop.test(target_total, injury_total)
+```
+
+
+
+Create faceted bar charts showing the top 10 countries for shark attacks then get the top 3 species that attack at location
+```{r, fig.width=10, fig.height=6}
+df_clean <- df_clean %>%
+  mutate(species = tolower(species))
+df_valid_sharks <- df_clean %>%
+  filter(
+    !is.na(Country), Country != "",
+    !is.na(species), species != "",
+    !str_detect(species, "unknown|unidentified|not confirmed|possible|questionable|shark involvement")
+  )
+#get top 10
+top_countries <- df_valid_sharks %>%
+  count(Country, sort = TRUE) %>%
+  slice_max(n, n = 10) %>%
+  pull(Country)
+#get top 3 sharks for each country unless tie
+top3_species_per_country <- df_valid_sharks %>%
+  filter(Country %in% top_countries) %>%
+  count(Country, species) %>%
+  group_by(Country) %>%
+  slice_max(n, n = 3) %>%
+  ungroup()
+#faceted bar chart
+ggplot(top3_species_per_country, aes(x = reorder(species, n), y = n, fill = species)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~ Country, scales = "free_y") +
+  labs(
+    title = "Top 3 Shark Species in Top 10 Countries for Shark Attacks",
+    x = "Shark Species",
+    y = "Number of Incidents"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 10)
+  )
+```
+
+
+
+

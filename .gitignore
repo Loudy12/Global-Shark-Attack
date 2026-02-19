@@ -1,0 +1,19 @@
+﻿# R
+.Rhistory
+.RData
+.Ruserdata
+
+# RStudio
+.Rproj.user/
+*.Rproj
+
+# Outputs (optional)
+*.html
+*.pdf
+
+# Data outputs (optional)
+data/processed/
+
+# OS
+.DS_Store
+Thumbs.db
