@@ -1,6 +1,3 @@
-## Global-Shark-Attack — `README.md`
-
-
 # Global Shark Attack Analysis
 
 An R-based data analysis project exploring patterns in global shark incidents.  
